@@ -76,7 +76,11 @@ class ContractIngestionWorkflow:
         return ContractUploadResponse(
             contract=state["contract"],
             clauses_count=len(state["clauses"]),
-            vector_collection=self.settings.chroma_collection_name,
+            vector_collection=getattr(
+                self.vector_repository,
+                "collection_name",
+                self.settings.chroma_collection_name,
+            ),
         )
 
     def _build_graph(self):
@@ -222,4 +226,3 @@ class RiskAnalysisWorkflow:
 
     def _should_call_llm(self, state: RiskAnalysisState) -> str:
         return "llm" if state.get("use_llm") else "done"
-

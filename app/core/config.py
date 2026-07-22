@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -14,6 +15,28 @@ class Settings(BaseSettings):
     openai_embedding_model: str = Field(
         default="text-embedding-3-large",
         validation_alias="OPENAI_EMBEDDING_MODEL",
+    )
+    llm_provider: Literal["ollama", "openai"] = Field(
+        default="ollama",
+        validation_alias="LLM_PROVIDER",
+    )
+    ollama_base_url: str = Field(
+        default="http://localhost:11434",
+        validation_alias="OLLAMA_BASE_URL",
+    )
+    ollama_chat_model: str = Field(
+        default="llama3.1:8b",
+        validation_alias="OLLAMA_CHAT_MODEL",
+    )
+    embedding_provider: Literal["local", "openai"] = Field(
+        default="local",
+        validation_alias="EMBEDDING_PROVIDER",
+    )
+    local_embedding_dimensions: int = Field(
+        default=384,
+        ge=64,
+        le=2048,
+        validation_alias="LOCAL_EMBEDDING_DIMENSIONS",
     )
 
     chroma_persist_directory: Path = Field(
@@ -42,7 +65,11 @@ class Settings(BaseSettings):
     llm_timeout_seconds: int = Field(default=60, ge=5, validation_alias="LLM_TIMEOUT_SECONDS")
     llm_max_retries: int = Field(default=2, ge=0, validation_alias="LLM_MAX_RETRIES")
     allowed_origins: list[str] = Field(
-        default_factory=lambda: ["http://localhost:3000", "http://localhost:8000"],
+        default_factory=lambda: [
+            "http://localhost:3000",
+            "http://localhost:8000",
+            "http://localhost:8501",
+        ],
         validation_alias="ALLOWED_ORIGINS",
     )
 
@@ -63,6 +90,12 @@ class Settings(BaseSettings):
             return None
         value = self.openai_api_key.get_secret_value().strip()
         return value or None
+
+    @property
+    def active_chat_model(self) -> str:
+        if self.llm_provider == "ollama":
+            return self.ollama_chat_model
+        return self.openai_model
 
 
 @lru_cache

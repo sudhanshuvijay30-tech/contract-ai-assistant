@@ -42,6 +42,8 @@ class HealthResponse(BaseModel):
     version: str
     environment: str
     model: str
+    llm_provider: str
+    embedding_provider: str
 
 
 class ExtractedPage(BaseModel):

@@ -2,6 +2,7 @@ import hashlib
 import json
 from typing import TypeVar
 
+import httpx
 from pydantic import BaseModel, Field
 
 from app.core.config import Settings
@@ -220,6 +221,15 @@ class ContractAIService:
         schema: type[StructuredModel],
         messages: list[tuple[str, str]],
     ) -> StructuredModel:
+        if self.settings.llm_provider == "ollama":
+            return await self._invoke_ollama_structured(schema, messages)
+        return await self._invoke_openai_structured(schema, messages)
+
+    async def _invoke_openai_structured(
+        self,
+        schema: type[StructuredModel],
+        messages: list[tuple[str, str]],
+    ) -> StructuredModel:
         api_key = self.settings.openai_api_key_value
         if not api_key:
             raise AIProviderNotConfiguredError("OPENAI_API_KEY is required for GPT-5 analysis.")
@@ -235,10 +245,99 @@ class ContractAIService:
             timeout=self.settings.llm_timeout_seconds,
             max_retries=self.settings.llm_max_retries,
         ).with_structured_output(schema)
-        result = await model.ainvoke(messages)
+        try:
+            result = await model.ainvoke(messages)
+        except Exception as exc:
+            raise AIProviderNotConfiguredError(self._format_openai_error(exc)) from exc
         if isinstance(result, schema):
             return result
         return schema.model_validate(result)
+
+    async def _invoke_ollama_structured(
+        self,
+        schema: type[StructuredModel],
+        messages: list[tuple[str, str]],
+    ) -> StructuredModel:
+        prompt_messages = self._ollama_messages(schema, messages)
+        payload = {
+            "model": self.settings.ollama_chat_model,
+            "messages": prompt_messages,
+            "stream": False,
+            "format": schema.model_json_schema(),
+            "options": {"temperature": 0},
+        }
+
+        try:
+            async with httpx.AsyncClient(
+                base_url=self.settings.ollama_base_url.rstrip("/"),
+                timeout=self.settings.llm_timeout_seconds,
+            ) as client:
+                response = await client.post("/api/chat", json=payload)
+                response.raise_for_status()
+        except httpx.ConnectError as exc:
+            raise AIProviderNotConfiguredError(
+                "Unable to reach Ollama. Start Ollama, then confirm it is running at "
+                f"{self.settings.ollama_base_url}."
+            ) from exc
+        except httpx.HTTPStatusError as exc:
+            message = self._format_ollama_http_error(exc.response)
+            raise AIProviderNotConfiguredError(message) from exc
+        except httpx.RequestError as exc:
+            raise AIProviderNotConfiguredError(
+                f"Ollama request failed: {exc.__class__.__name__}."
+            ) from exc
+
+        content = response.json().get("message", {}).get("content", "")
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError as exc:
+            raise AIProviderNotConfiguredError(
+                "Ollama returned non-JSON output. Try a stronger instruction-following model "
+                f"or pull {self.settings.ollama_chat_model} again."
+            ) from exc
+
+        return schema.model_validate(parsed)
+
+    def _ollama_messages(
+        self,
+        schema: type[StructuredModel],
+        messages: list[tuple[str, str]],
+    ) -> list[dict[str, str]]:
+        formatted: list[dict[str, str]] = []
+        schema_json = json.dumps(schema.model_json_schema(), ensure_ascii=False)
+        for role, content in messages:
+            ollama_role = "user" if role == "human" else role
+            formatted.append({"role": ollama_role, "content": content})
+        formatted.append(
+            {
+                "role": "user",
+                "content": (
+                    "Return only valid JSON that satisfies this JSON Schema. "
+                    f"Do not include Markdown.\n\n{schema_json}"
+                ),
+            }
+        )
+        return formatted
+
+    def _format_openai_error(self, exc: Exception) -> str:
+        message = str(exc)
+        lowered = message.lower()
+        if any(term in lowered for term in ("insufficient_quota", "quota", "billing", "credit")):
+            return (
+                "OpenAI rejected the request because the account has no available credits "
+                "or quota. Set LLM_PROVIDER=ollama to use your local Ollama model."
+            )
+        return f"OpenAI request failed: {message}"
+
+    def _format_ollama_http_error(self, response: httpx.Response) -> str:
+        body = response.text
+        lowered = body.lower()
+        if response.status_code == 404 or "not found" in lowered:
+            return (
+                f"Ollama model '{self.settings.ollama_chat_model}' is not available. "
+                f"Run: ollama pull {self.settings.ollama_chat_model}"
+            )
+        return f"Ollama request failed with HTTP {response.status_code}: {body}"
 
     def _draft_to_clause(
         self,
@@ -264,7 +363,7 @@ class ContractAIService:
             start_char=start,
             end_char=end,
             confidence=draft.confidence,
-            source=self.settings.openai_model,
+            source=self.settings.active_chat_model,
         )
 
     def _truncate(self, text: str, limit: int | None = None) -> str:

@@ -1,12 +1,51 @@
+import hashlib
+import math
+import re
+
+from langchain_core.embeddings import Embeddings
+
 from app.core.config import Settings
 from app.core.errors import VectorStoreError
 from app.schemas.contracts import Clause, VectorSearchResult
+
+TOKEN_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9_-]{1,}")
+
+
+class LocalHashEmbeddings(Embeddings):
+    def __init__(self, dimensions: int = 384):
+        self.dimensions = dimensions
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [self._embed(text) for text in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._embed(text)
+
+    def _embed(self, text: str) -> list[float]:
+        vector = [0.0] * self.dimensions
+        tokens = TOKEN_RE.findall(text.lower())
+        for token in tokens:
+            digest = hashlib.blake2b(token.encode("utf-8"), digest_size=8).digest()
+            index = int.from_bytes(digest[:4], byteorder="big") % self.dimensions
+            sign = 1.0 if digest[4] % 2 == 0 else -1.0
+            vector[index] += sign
+
+        norm = math.sqrt(sum(value * value for value in vector))
+        if not norm:
+            return vector
+        return [value / norm for value in vector]
 
 
 class ContractVectorRepository:
     def __init__(self, settings: Settings):
         self.settings = settings
         self._store = None
+
+    @property
+    def collection_name(self) -> str:
+        if self.settings.embedding_provider == "local":
+            return f"{self.settings.chroma_collection_name}_local"
+        return self.settings.chroma_collection_name
 
     def upsert_clauses(self, clauses: list[Clause]) -> None:
         if not clauses:
@@ -34,6 +73,8 @@ class ContractVectorRepository:
         ids = [clause.id for clause in clauses]
         try:
             self._ensure_store().add_documents(documents, ids=ids)
+        except VectorStoreError:
+            raise
         except Exception as exc:
             raise VectorStoreError("Unable to index clauses in ChromaDB.") from exc
 
@@ -44,6 +85,8 @@ class ContractVectorRepository:
                 k=top_k,
                 filter={"contract_id": contract_id},
             )
+        except VectorStoreError:
+            raise
         except Exception as exc:
             raise VectorStoreError("Unable to search clauses in ChromaDB.") from exc
 
@@ -62,26 +105,34 @@ class ContractVectorRepository:
         if self._store is not None:
             return self._store
 
+        try:
+            from langchain_chroma import Chroma
+        except ImportError as exc:
+            raise RuntimeError("langchain-chroma is required for ChromaDB") from exc
+
+        self.settings.chroma_persist_directory.mkdir(parents=True, exist_ok=True)
+        embeddings = self._build_embeddings()
+        self._store = Chroma(
+            collection_name=self.collection_name,
+            persist_directory=str(self.settings.chroma_persist_directory),
+            embedding_function=embeddings,
+        )
+        return self._store
+
+    def _build_embeddings(self) -> Embeddings:
+        if self.settings.embedding_provider == "local":
+            return LocalHashEmbeddings(self.settings.local_embedding_dimensions)
+
         api_key = self.settings.openai_api_key_value
         if not api_key:
             raise VectorStoreError("OPENAI_API_KEY is required for OpenAI embeddings and ChromaDB.")
 
         try:
-            from langchain_chroma import Chroma
             from langchain_openai import OpenAIEmbeddings
         except ImportError as exc:
-            raise RuntimeError(
-                "langchain-chroma and langchain-openai are required for ChromaDB"
-            ) from exc
+            raise RuntimeError("langchain-openai is required for OpenAI embeddings") from exc
 
-        self.settings.chroma_persist_directory.mkdir(parents=True, exist_ok=True)
-        embeddings = OpenAIEmbeddings(
+        return OpenAIEmbeddings(
             model=self.settings.openai_embedding_model,
             api_key=api_key,
         )
-        self._store = Chroma(
-            collection_name=self.settings.chroma_collection_name,
-            persist_directory=str(self.settings.chroma_persist_directory),
-            embedding_function=embeddings,
-        )
-        return self._store

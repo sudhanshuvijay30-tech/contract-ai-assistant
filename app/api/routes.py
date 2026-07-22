@@ -27,7 +27,9 @@ def health() -> HealthResponse:
         app_name=settings.app_name,
         version=__version__,
         environment=settings.environment,
-        model=settings.openai_model,
+        model=settings.active_chat_model,
+        llm_provider=settings.llm_provider,
+        embedding_provider=settings.embedding_provider,
     )
 
 
@@ -99,4 +101,3 @@ async def ask_contract(
     service: ContractService = Depends(get_contract_service),
 ) -> AskContractResponse:
     return await service.ask_contract(contract_id, request)
-
