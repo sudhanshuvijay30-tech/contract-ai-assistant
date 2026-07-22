@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Contract AI Assistant runtime data
+data/chroma/
+data/contracts/
+data/uploads/
