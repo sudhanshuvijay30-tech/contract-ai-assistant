@@ -15,6 +15,8 @@ def test_upload_contract_posts_file_and_use_ai_flag():
         assert request.method == "POST"
         assert request.url.path == "/contracts/upload"
         assert request.url.params["use_ai"] == "true"
+        assert request.url.params["llm_provider"] == "ollama"
+        assert request.url.params["llm_model"] == "llama3.1:8b"
         assert b"contract.pdf" in request.content
         return httpx.Response(
             201,
@@ -30,6 +32,8 @@ def test_upload_contract_posts_file_and_use_ai_flag():
         content=b"%PDF-1.7 sample",
         content_type="application/pdf",
         use_ai=True,
+        llm_provider="ollama",
+        llm_model="llama3.1:8b",
     )
 
     assert response["contract"]["id"] == "abc123"
@@ -53,3 +57,34 @@ def test_client_surfaces_api_error_detail_and_code():
     assert "OPENAI_API_KEY" in exc_info.value.message
     assert "Add it to .env" in missing_openai_help(exc_info.value)
 
+
+def test_compare_clauses_sends_selected_ai_provider():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/compare"
+        payload = request.read()
+        assert b'"llm_provider":"openai"' in payload
+        assert b'"llm_model":"gpt-5"' in payload
+        return httpx.Response(
+            200,
+            json={
+                "alignment_score": 0.7,
+                "risk_delta": "medium",
+                "summary": "Some deviations exist.",
+                "missing_terms": [],
+                "material_deviations": [],
+                "negotiation_points": [],
+                "recommended_clause": None,
+            },
+        )
+
+    response = make_client(handler).compare_clauses(
+        source_clause={"text": "The preferred clause includes a mutual liability cap."},
+        counterparty_clause={"text": "The counterparty clause has no liability cap."},
+        preferred_position=None,
+        use_llm=True,
+        llm_provider="openai",
+        llm_model="gpt-5",
+    )
+
+    assert response["risk_delta"] == "medium"

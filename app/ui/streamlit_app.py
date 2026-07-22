@@ -29,6 +29,9 @@ def get_api_client() -> ContractAPIClient:
 def init_state() -> None:
     defaults = {
         "contract_id": "",
+        "ai_provider": "ollama",
+        "ollama_model": "llama3.1:8b",
+        "openai_model": "gpt-5",
         "upload_response": None,
         "clauses_response": None,
         "risks_response": None,
@@ -62,6 +65,24 @@ def render_status(client: ContractAPIClient) -> None:
         st.caption(f"Embeddings: {health.get('embedding_provider', 'unknown')}")
         st.caption(f"{health.get('app_name', 'Contract AI Assistant')} {health.get('version', '')}")
 
+        provider = st.segmented_control(
+            "AI provider",
+            options=["ollama", "openai"],
+            format_func=lambda value: "Ollama" if value == "ollama" else "GPT/OpenAI",
+            default=st.session_state.ai_provider,
+        )
+        st.session_state.ai_provider = provider or "ollama"
+        if st.session_state.ai_provider == "ollama":
+            st.session_state.ollama_model = st.text_input(
+                "Ollama model",
+                value=st.session_state.ollama_model,
+            ).strip()
+        else:
+            st.session_state.openai_model = st.text_input(
+                "OpenAI model",
+                value=st.session_state.openai_model,
+            ).strip()
+
         contract_id = st.text_input(
             "Contract ID",
             value=st.session_state.contract_id,
@@ -69,6 +90,13 @@ def render_status(client: ContractAPIClient) -> None:
         )
         if contract_id != st.session_state.contract_id:
             st.session_state.contract_id = contract_id.strip()
+
+
+def selected_llm() -> tuple[str, str]:
+    provider = st.session_state.ai_provider
+    if provider == "openai":
+        return provider, st.session_state.openai_model or "gpt-5"
+    return provider, st.session_state.ollama_model or "llama3.1:8b"
 
 
 def render_upload(client: ContractAPIClient) -> None:
@@ -79,6 +107,7 @@ def render_upload(client: ContractAPIClient) -> None:
     if st.button("Upload and index", type="primary", disabled=uploaded_file is None):
         if uploaded_file is None:
             return
+        llm_provider, llm_model = selected_llm()
         with st.spinner("Extracting clauses and indexing the contract..."):
             try:
                 response = client.upload_contract(
@@ -86,6 +115,8 @@ def render_upload(client: ContractAPIClient) -> None:
                     content=uploaded_file.getvalue(),
                     content_type=uploaded_file.type or "application/pdf",
                     use_ai=use_ai,
+                    llm_provider=llm_provider,
+                    llm_model=llm_model,
                 )
             except APIClientError as exc:
                 render_error(exc)
@@ -147,9 +178,15 @@ def render_risks(client: ContractAPIClient) -> None:
 
     use_llm = st.toggle("Use AI risk analysis", value=False)
     if st.button("Analyze risks", type="primary"):
+        llm_provider, llm_model = selected_llm()
         with st.spinner("Analyzing contract risk..."):
             try:
-                st.session_state.risks_response = client.analyze_risks(contract_id, use_llm)
+                st.session_state.risks_response = client.analyze_risks(
+                    contract_id,
+                    use_llm,
+                    llm_provider=llm_provider,
+                    llm_model=llm_model,
+                )
             except APIClientError as exc:
                 render_error(exc)
                 return
@@ -199,6 +236,7 @@ def render_compare(client: ContractAPIClient) -> None:
     ready = len(source_text.strip()) >= 10 and len(counterparty_text.strip()) >= 10
 
     if st.button("Compare clauses", type="primary", disabled=not ready):
+        llm_provider, llm_model = selected_llm()
         with st.spinner("Comparing clause positions..."):
             try:
                 response = client.compare_clauses(
@@ -214,6 +252,8 @@ def render_compare(client: ContractAPIClient) -> None:
                     },
                     preferred_position=preferred_position,
                     use_llm=use_llm,
+                    llm_provider=llm_provider,
+                    llm_model=llm_model,
                 )
             except APIClientError as exc:
                 render_error(exc)
@@ -257,8 +297,16 @@ def render_ask(client: ContractAPIClient) -> None:
 
     with st.chat_message("assistant"):
         with st.spinner("Reading relevant clauses..."):
+            llm_provider, llm_model = selected_llm()
             try:
-                response = client.ask_contract(contract_id, question, top_k, use_llm)
+                response = client.ask_contract(
+                    contract_id,
+                    question,
+                    top_k,
+                    use_llm,
+                    llm_provider=llm_provider,
+                    llm_model=llm_model,
+                )
             except APIClientError as exc:
                 render_error(exc)
                 return

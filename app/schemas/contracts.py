@@ -12,6 +12,11 @@ class RiskLevel(StrEnum):
     CRITICAL = "critical"
 
 
+class AIProvider(StrEnum):
+    OLLAMA = "ollama"
+    OPENAI = "openai"
+
+
 class ClauseType(StrEnum):
     CONFIDENTIALITY = "confidentiality"
     INDEMNITY = "indemnity"
@@ -89,6 +94,8 @@ class ClauseListResponse(BaseModel):
 
 class RiskAnalysisRequest(BaseModel):
     use_llm: bool = True
+    llm_provider: AIProvider | None = None
+    llm_model: str | None = None
 
 
 class RiskItem(BaseModel):
@@ -121,6 +128,8 @@ class ClauseComparisonRequest(BaseModel):
     counterparty_clause: ClauseInput
     preferred_position: str | None = None
     use_llm: bool = True
+    llm_provider: AIProvider | None = None
+    llm_model: str | None = None
 
 
 class ClauseComparisonResponse(BaseModel):
@@ -137,6 +146,8 @@ class AskContractRequest(BaseModel):
     question: str = Field(min_length=3)
     top_k: int = Field(default=5, ge=1, le=12)
     use_llm: bool = True
+    llm_provider: AIProvider | None = None
+    llm_model: str | None = None
 
 
 class SourceSnippet(BaseModel):

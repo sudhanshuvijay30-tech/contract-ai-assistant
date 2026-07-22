@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from app.core.config import Settings
 from app.core.errors import AIProviderNotConfiguredError
 from app.schemas.contracts import (
+    AIProvider,
     AskContractResponse,
     Clause,
     ClauseComparisonRequest,
@@ -67,6 +68,8 @@ class ContractAIService:
         contract_id: str,
         contract_text: str,
         preliminary_clauses: list[Clause],
+        llm_provider: AIProvider | None = None,
+        llm_model: str | None = None,
     ) -> list[Clause]:
         payload = {
             "contract_text": self._truncate(contract_text),
@@ -90,9 +93,12 @@ class ContractAIService:
                     f"{json.dumps(payload, ensure_ascii=False)}",
                 ),
             ],
+            llm_provider=llm_provider,
+            llm_model=llm_model,
         )
+        source_model = self._resolve_chat_model(llm_provider, llm_model)
         clauses = [
-            self._draft_to_clause(contract_id, index, draft, contract_text)
+            self._draft_to_clause(contract_id, index, draft, contract_text, source_model)
             for index, draft in enumerate(result.clauses, start=1)
             if draft.text.strip()
         ]
@@ -103,6 +109,8 @@ class ContractAIService:
         contract_id: str,
         clauses: list[Clause],
         contract_text: str,
+        llm_provider: AIProvider | None = None,
+        llm_model: str | None = None,
     ) -> RiskAnalysisResponse:
         payload = {
             "contract_id": contract_id,
@@ -133,6 +141,8 @@ class ContractAIService:
                     f"{json.dumps(payload, ensure_ascii=False)}",
                 ),
             ],
+            llm_provider=llm_provider,
+            llm_model=llm_model,
         )
         return RiskAnalysisResponse(
             contract_id=contract_id,
@@ -174,6 +184,8 @@ class ContractAIService:
                     f"{request.model_dump_json()}",
                 ),
             ],
+            llm_provider=request.llm_provider,
+            llm_model=request.llm_model,
         )
 
     async def answer_question(
@@ -181,6 +193,8 @@ class ContractAIService:
         contract_id: str,
         question: str,
         sources: list[SourceSnippet],
+        llm_provider: AIProvider | None = None,
+        llm_model: str | None = None,
     ) -> AskContractResponse:
         sources_json = json.dumps(
             [source.model_dump(mode="json") for source in sources],
@@ -205,6 +219,8 @@ class ContractAIService:
                     f"{sources_json}",
                 ),
             ],
+            llm_provider=llm_provider,
+            llm_model=llm_model,
         )
         cited = set(result.cited_clause_ids)
         selected_sources = [source for source in sources if not cited or source.clause_id in cited]
@@ -220,15 +236,20 @@ class ContractAIService:
         self,
         schema: type[StructuredModel],
         messages: list[tuple[str, str]],
+        llm_provider: AIProvider | None = None,
+        llm_model: str | None = None,
     ) -> StructuredModel:
-        if self.settings.llm_provider == "ollama":
-            return await self._invoke_ollama_structured(schema, messages)
-        return await self._invoke_openai_structured(schema, messages)
+        provider = self._resolve_llm_provider(llm_provider)
+        model = self._resolve_chat_model(provider, llm_model)
+        if provider == AIProvider.OLLAMA:
+            return await self._invoke_ollama_structured(schema, messages, model)
+        return await self._invoke_openai_structured(schema, messages, model)
 
     async def _invoke_openai_structured(
         self,
         schema: type[StructuredModel],
         messages: list[tuple[str, str]],
+        model_name: str,
     ) -> StructuredModel:
         api_key = self.settings.openai_api_key_value
         if not api_key:
@@ -240,7 +261,7 @@ class ContractAIService:
             raise RuntimeError("langchain-openai is required for GPT-5 analysis") from exc
 
         model = ChatOpenAI(
-            model=self.settings.openai_model,
+            model=model_name,
             api_key=api_key,
             timeout=self.settings.llm_timeout_seconds,
             max_retries=self.settings.llm_max_retries,
@@ -257,10 +278,11 @@ class ContractAIService:
         self,
         schema: type[StructuredModel],
         messages: list[tuple[str, str]],
+        model_name: str,
     ) -> StructuredModel:
         prompt_messages = self._ollama_messages(schema, messages)
         payload = {
-            "model": self.settings.ollama_chat_model,
+            "model": model_name,
             "messages": prompt_messages,
             "stream": False,
             "format": schema.model_json_schema(),
@@ -280,7 +302,7 @@ class ContractAIService:
                 f"{self.settings.ollama_base_url}."
             ) from exc
         except httpx.HTTPStatusError as exc:
-            message = self._format_ollama_http_error(exc.response)
+            message = self._format_ollama_http_error(exc.response, model_name)
             raise AIProviderNotConfiguredError(message) from exc
         except httpx.RequestError as exc:
             raise AIProviderNotConfiguredError(
@@ -293,10 +315,27 @@ class ContractAIService:
         except json.JSONDecodeError as exc:
             raise AIProviderNotConfiguredError(
                 "Ollama returned non-JSON output. Try a stronger instruction-following model "
-                f"or pull {self.settings.ollama_chat_model} again."
+                f"or pull {model_name} again."
             ) from exc
 
         return schema.model_validate(parsed)
+
+    def _resolve_llm_provider(self, provider: AIProvider | str | None = None) -> AIProvider:
+        if provider is None:
+            return AIProvider(self.settings.llm_provider)
+        return AIProvider(provider)
+
+    def _resolve_chat_model(
+        self,
+        provider: AIProvider | str | None = None,
+        model: str | None = None,
+    ) -> str:
+        if model and model.strip():
+            return model.strip()
+        resolved_provider = self._resolve_llm_provider(provider)
+        if resolved_provider == AIProvider.OLLAMA:
+            return self.settings.ollama_chat_model
+        return self.settings.openai_model
 
     def _ollama_messages(
         self,
@@ -329,13 +368,13 @@ class ContractAIService:
             )
         return f"OpenAI request failed: {message}"
 
-    def _format_ollama_http_error(self, response: httpx.Response) -> str:
+    def _format_ollama_http_error(self, response: httpx.Response, model_name: str) -> str:
         body = response.text
         lowered = body.lower()
         if response.status_code == 404 or "not found" in lowered:
             return (
-                f"Ollama model '{self.settings.ollama_chat_model}' is not available. "
-                f"Run: ollama pull {self.settings.ollama_chat_model}"
+                f"Ollama model '{model_name}' is not available. "
+                f"Run: ollama pull {model_name}"
             )
         return f"Ollama request failed with HTTP {response.status_code}: {body}"
 
@@ -345,6 +384,7 @@ class ContractAIService:
         index: int,
         draft: ClauseDraft,
         contract_text: str,
+        source_model: str,
     ) -> Clause:
         text = draft.text.strip()
         start = contract_text.find(text[:120])
@@ -363,7 +403,7 @@ class ContractAIService:
             start_char=start,
             end_char=end,
             confidence=draft.confidence,
-            source=self.settings.active_chat_model,
+            source=source_model,
         )
 
     def _truncate(self, text: str, limit: int | None = None) -> str:

@@ -2,6 +2,7 @@ from app.core.config import Settings
 from app.core.errors import NotFoundError
 from app.graphs.contract_graph import ContractIngestionWorkflow, RiskAnalysisWorkflow
 from app.schemas.contracts import (
+    AIProvider,
     AskContractRequest,
     AskContractResponse,
     ClauseComparisonRequest,
@@ -44,6 +45,8 @@ class ContractService:
         content_type: str,
         content: bytes,
         use_ai: bool,
+        llm_provider: AIProvider | None = None,
+        llm_model: str | None = None,
     ) -> ContractUploadResponse:
         workflow = ContractIngestionWorkflow(
             settings=self.settings,
@@ -53,7 +56,7 @@ class ContractService:
             clause_parser=self.clause_parser,
             pdf_extractor=self.pdf_extractor,
         )
-        return await workflow.run(filename, content_type, content, use_ai)
+        return await workflow.run(filename, content_type, content, use_ai, llm_provider, llm_model)
 
     def list_clauses(self, contract_id: str) -> ClauseListResponse:
         clauses = self.store.get_clauses(contract_id)
@@ -73,6 +76,8 @@ class ContractService:
             clauses=clauses,
             contract_text=raw_text,
             use_llm=request.use_llm,
+            llm_provider=request.llm_provider,
+            llm_model=request.llm_model,
         )
         self.store.update_status(contract_id, "analyzed")
         return result
@@ -101,7 +106,13 @@ class ContractService:
         if not sources:
             raise NotFoundError("No relevant clauses were found for that question.")
         if request.use_llm:
-            return await self.ai_service.answer_question(contract_id, request.question, sources)
+            return await self.ai_service.answer_question(
+                contract_id,
+                request.question,
+                sources,
+                llm_provider=request.llm_provider,
+                llm_model=request.llm_model,
+            )
         joined_sources = "\n\n".join(f"{source.title}: {source.text}" for source in sources[:3])
         return AskContractResponse(
             contract_id=contract_id,
@@ -110,4 +121,3 @@ class ContractService:
             confidence=0.55,
             sources=sources,
         )
-

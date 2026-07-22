@@ -4,6 +4,7 @@ from app import __version__
 from app.api.deps import get_contract_service
 from app.core.config import get_settings
 from app.schemas.contracts import (
+    AIProvider,
     AskContractRequest,
     AskContractResponse,
     ClauseComparisonRequest,
@@ -41,7 +42,15 @@ def health() -> HealthResponse:
 )
 async def upload_contract(
     file: UploadFile = File(...),
-    use_ai: bool = Query(False, description="Use GPT-5 to refine deterministic clause extraction."),
+    use_ai: bool = Query(False, description="Use AI to refine deterministic clause extraction."),
+    llm_provider: AIProvider | None = Query(
+        None,
+        description="Override the configured LLM provider for this upload refinement.",
+    ),
+    llm_model: str | None = Query(
+        None,
+        description="Override the configured LLM model for this upload refinement.",
+    ),
     service: ContractService = Depends(get_contract_service),
 ) -> ContractUploadResponse:
     content = await file.read()
@@ -50,6 +59,8 @@ async def upload_contract(
         content_type=file.content_type or "application/pdf",
         content=content,
         use_ai=use_ai,
+        llm_provider=llm_provider,
+        llm_model=llm_model,
     )
 
 

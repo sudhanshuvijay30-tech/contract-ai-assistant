@@ -29,22 +29,39 @@ class ContractAPIClient:
         content: bytes,
         content_type: str,
         use_ai: bool,
+        llm_provider: str | None = None,
+        llm_model: str | None = None,
     ) -> dict[str, Any]:
+        params = {"use_ai": str(use_ai).lower()}
+        if llm_provider:
+            params["llm_provider"] = llm_provider
+        if llm_model:
+            params["llm_model"] = llm_model
         return self._request(
             "POST",
             "/contracts/upload",
-            params={"use_ai": str(use_ai).lower()},
+            params=params,
             files={"file": (filename, content, content_type)},
         )
 
     def list_clauses(self, contract_id: str) -> dict[str, Any]:
         return self._request("GET", f"/contracts/{contract_id}/clauses")
 
-    def analyze_risks(self, contract_id: str, use_llm: bool) -> dict[str, Any]:
+    def analyze_risks(
+        self,
+        contract_id: str,
+        use_llm: bool,
+        llm_provider: str | None = None,
+        llm_model: str | None = None,
+    ) -> dict[str, Any]:
         return self._request(
             "POST",
             f"/contracts/{contract_id}/risks",
-            json={"use_llm": use_llm},
+            json={
+                "use_llm": use_llm,
+                "llm_provider": llm_provider,
+                "llm_model": llm_model,
+            },
         )
 
     def compare_clauses(
@@ -53,6 +70,8 @@ class ContractAPIClient:
         counterparty_clause: dict[str, Any],
         preferred_position: str | None,
         use_llm: bool,
+        llm_provider: str | None = None,
+        llm_model: str | None = None,
     ) -> dict[str, Any]:
         return self._request(
             "POST",
@@ -62,6 +81,8 @@ class ContractAPIClient:
                 "counterparty_clause": counterparty_clause,
                 "preferred_position": preferred_position or None,
                 "use_llm": use_llm,
+                "llm_provider": llm_provider,
+                "llm_model": llm_model,
             },
         )
 
@@ -71,11 +92,19 @@ class ContractAPIClient:
         question: str,
         top_k: int,
         use_llm: bool,
+        llm_provider: str | None = None,
+        llm_model: str | None = None,
     ) -> dict[str, Any]:
         return self._request(
             "POST",
             f"/contracts/{contract_id}/ask",
-            json={"question": question, "top_k": top_k, "use_llm": use_llm},
+            json={
+                "question": question,
+                "top_k": top_k,
+                "use_llm": use_llm,
+                "llm_provider": llm_provider,
+                "llm_model": llm_model,
+            },
         )
 
     def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:

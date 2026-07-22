@@ -6,6 +6,7 @@ from typing import TypedDict
 from app.core.config import Settings
 from app.core.errors import BadRequestError
 from app.schemas.contracts import (
+    AIProvider,
     Clause,
     ContractRecord,
     ContractStatus,
@@ -26,6 +27,8 @@ class IngestionState(TypedDict, total=False):
     content_type: str
     content: bytes
     use_ai: bool
+    llm_provider: AIProvider | None
+    llm_model: str | None
     contract: ContractRecord
     pages: list[ExtractedPage]
     raw_text: str
@@ -37,6 +40,8 @@ class RiskAnalysisState(TypedDict, total=False):
     clauses: list[Clause]
     contract_text: str
     use_llm: bool
+    llm_provider: AIProvider | None
+    llm_model: str | None
     result: RiskAnalysisResponse
 
 
@@ -63,6 +68,8 @@ class ContractIngestionWorkflow:
         content_type: str,
         content: bytes,
         use_ai: bool,
+        llm_provider: AIProvider | None = None,
+        llm_model: str | None = None,
     ) -> ContractUploadResponse:
         graph = self._build_graph()
         state = await graph.ainvoke(
@@ -71,6 +78,8 @@ class ContractIngestionWorkflow:
                 "content_type": content_type,
                 "content": content,
                 "use_ai": use_ai,
+                "llm_provider": llm_provider,
+                "llm_model": llm_model,
             }
         )
         return ContractUploadResponse(
@@ -143,6 +152,8 @@ class ContractIngestionWorkflow:
             state["contract"].id,
             state["raw_text"],
             state["clauses"],
+            llm_provider=state.get("llm_provider"),
+            llm_model=state.get("llm_model"),
         )
         return {"clauses": clauses}
 
@@ -177,6 +188,8 @@ class RiskAnalysisWorkflow:
         clauses: list[Clause],
         contract_text: str,
         use_llm: bool,
+        llm_provider: AIProvider | None = None,
+        llm_model: str | None = None,
     ) -> RiskAnalysisResponse:
         graph = self._build_graph()
         state = await graph.ainvoke(
@@ -185,6 +198,8 @@ class RiskAnalysisWorkflow:
                 "clauses": clauses,
                 "contract_text": contract_text,
                 "use_llm": use_llm,
+                "llm_provider": llm_provider,
+                "llm_model": llm_model,
             }
         )
         return state["result"]
@@ -221,6 +236,8 @@ class RiskAnalysisWorkflow:
                 contract_id=state["contract_id"],
                 clauses=state["clauses"],
                 contract_text=state["contract_text"],
+                llm_provider=state.get("llm_provider"),
+                llm_model=state.get("llm_model"),
             )
         }
 

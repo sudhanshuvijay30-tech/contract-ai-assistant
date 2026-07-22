@@ -63,6 +63,8 @@ Open the main UI at `http://localhost:8501`.
 By default, `EMBEDDING_PROVIDER=local`, so uploads, clause review, rule-based risk analysis,
 clause comparison, and excerpt-based Q&A can run without OpenAI credits. Set
 `LLM_PROVIDER=openai` and `EMBEDDING_PROVIDER=openai` when you want GPT-5 and OpenAI embeddings.
+The Streamlit sidebar also includes an AI provider selector, so you can switch individual
+AI-powered actions between Ollama and GPT/OpenAI without changing `.env` or restarting the app.
 
 The Swagger API console is also available at `http://localhost:8000/docs` for testing raw API
 requests.
