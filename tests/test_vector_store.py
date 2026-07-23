@@ -45,3 +45,20 @@ def test_vector_store_defaults_to_local_collection(tmp_path):
 
     assert settings.embedding_provider == "local"
     assert repository.collection_name == "contract_clauses_local"
+
+
+def test_vector_store_builds_metadata_filter():
+    repository = ContractVectorRepository(Settings())
+
+    where = repository._build_where(
+        "contract-1",
+        {"contract_type": "MSA", "jurisdiction": "New York", "unknown": "ignored"},
+    )
+
+    assert where == {
+        "$and": [
+            {"contract_id": "contract-1"},
+            {"contract_type": "MSA"},
+            {"jurisdiction": "New York"},
+        ]
+    }

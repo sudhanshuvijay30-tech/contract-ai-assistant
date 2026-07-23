@@ -12,6 +12,16 @@ class BadRequestError(ContractAssistantError):
     code = "bad_request"
 
 
+class AuthenticationError(ContractAssistantError):
+    status_code = 401
+    code = "authentication_error"
+
+
+class RateLimitError(ContractAssistantError):
+    status_code = 429
+    code = "rate_limit_exceeded"
+
+
 class NotFoundError(ContractAssistantError):
     status_code = 404
     code = "not_found"
@@ -26,3 +36,12 @@ class VectorStoreError(ContractAssistantError):
     status_code = 503
     code = "vector_store_error"
 
+
+class StorageError(ContractAssistantError):
+    status_code = 503
+    code = "storage_error"
+
+
+class JobQueueError(ContractAssistantError):
+    status_code = 503
+    code = "job_queue_error"

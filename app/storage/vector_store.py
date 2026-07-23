@@ -6,7 +6,7 @@ from langchain_core.embeddings import Embeddings
 
 from app.core.config import Settings
 from app.core.errors import VectorStoreError
-from app.schemas.contracts import Clause, VectorSearchResult
+from app.schemas.contracts import Clause, ContractMetadata, VectorSearchResult
 
 TOKEN_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9_-]{1,}")
 
@@ -47,7 +47,11 @@ class ContractVectorRepository:
             return f"{self.settings.chroma_collection_name}_local"
         return self.settings.chroma_collection_name
 
-    def upsert_clauses(self, clauses: list[Clause]) -> None:
+    def upsert_clauses(
+        self,
+        clauses: list[Clause],
+        contract_metadata: ContractMetadata | None = None,
+    ) -> None:
         if not clauses:
             return
         try:
@@ -55,21 +59,27 @@ class ContractVectorRepository:
         except ImportError as exc:
             raise RuntimeError("langchain-core is required for vector indexing") from exc
 
-        documents = [
-            Document(
-                page_content=clause.text,
-                metadata={
-                    "contract_id": clause.contract_id,
-                    "clause_id": clause.id,
-                    "title": clause.title,
-                    "type": clause.type.value,
-                    "page_start": clause.page_start,
-                    "page_end": clause.page_end,
-                    "source": clause.source,
-                },
+        contract_metadata_values = (
+            contract_metadata.vector_metadata() if contract_metadata is not None else {}
+        )
+        documents = []
+        for clause in clauses:
+            metadata = {
+                "contract_id": clause.contract_id,
+                "clause_id": clause.id,
+                "title": clause.title,
+                "type": clause.type.value,
+                "page_start": clause.page_start,
+                "page_end": clause.page_end,
+                "source": clause.source,
+                **contract_metadata_values,
+            }
+            documents.append(
+                Document(
+                    page_content=clause.text,
+                    metadata={key: value for key, value in metadata.items() if value is not None},
+                )
             )
-            for clause in clauses
-        ]
         ids = [clause.id for clause in clauses]
         try:
             self._ensure_store().add_documents(documents, ids=ids)
@@ -78,12 +88,19 @@ class ContractVectorRepository:
         except Exception as exc:
             raise VectorStoreError("Unable to index clauses in ChromaDB.") from exc
 
-    def search(self, contract_id: str, query: str, top_k: int) -> list[VectorSearchResult]:
+    def search(
+        self,
+        contract_id: str,
+        query: str,
+        top_k: int,
+        metadata_filters: dict[str, str] | None = None,
+    ) -> list[VectorSearchResult]:
+        where = self._build_where(contract_id, metadata_filters or {})
         try:
             results = self._ensure_store().similarity_search_with_relevance_scores(
                 query,
                 k=top_k,
-                filter={"contract_id": contract_id},
+                filter=where,
             )
         except VectorStoreError:
             raise
@@ -136,3 +153,14 @@ class ContractVectorRepository:
             model=self.settings.openai_embedding_model,
             api_key=api_key,
         )
+
+    def _build_where(self, contract_id: str, metadata_filters: dict[str, str]) -> dict:
+        filters = [{"contract_id": contract_id}]
+        filters.extend(
+            {key: value}
+            for key, value in metadata_filters.items()
+            if key in ContractMetadata.model_fields and value
+        )
+        if len(filters) == 1:
+            return filters[0]
+        return {"$and": filters}

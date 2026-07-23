@@ -51,6 +51,8 @@ class RiskAnalysisDraft(BaseModel):
     overall_risk_level: RiskLevel
     executive_summary: str
     risks: list[RiskFindingDraft]
+    compliance_findings: list[str] = Field(default_factory=list)
+    negotiation_recommendations: list[str] = Field(default_factory=list)
 
 
 class AnswerDraft(BaseModel):
@@ -161,6 +163,8 @@ class ContractAIService:
                 )
                 for risk in result.risks
             ],
+            compliance_findings=result.compliance_findings,
+            negotiation_recommendations=result.negotiation_recommendations,
         )
 
     async def compare_clauses(

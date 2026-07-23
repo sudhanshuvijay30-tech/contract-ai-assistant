@@ -17,6 +17,7 @@ def test_upload_contract_posts_file_and_use_ai_flag():
         assert request.url.params["use_ai"] == "true"
         assert request.url.params["llm_provider"] == "ollama"
         assert request.url.params["llm_model"] == "llama3.1:8b"
+        assert request.url.params["contract_type"] == "NDA"
         assert b"contract.pdf" in request.content
         return httpx.Response(
             201,
@@ -34,6 +35,7 @@ def test_upload_contract_posts_file_and_use_ai_flag():
         use_ai=True,
         llm_provider="ollama",
         llm_model="llama3.1:8b",
+        metadata={"contract_type": "NDA"},
     )
 
     assert response["contract"]["id"] == "abc123"
@@ -88,3 +90,62 @@ def test_compare_clauses_sends_selected_ai_provider():
     )
 
     assert response["risk_delta"] == "medium"
+
+
+def test_client_sends_bearer_token_and_async_upload_params():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/contracts/upload-async"
+        assert request.headers["Authorization"] == "Bearer secret-token"
+        assert request.url.params["customer"] == "Acme"
+        return httpx.Response(
+            202,
+            json={
+                "job": {
+                    "id": "job-1",
+                    "type": "contract_ingestion",
+                    "status": "queued",
+                    "contract_id": None,
+                    "error": None,
+                    "result": {},
+                    "created_at": "2026-07-22T00:00:00Z",
+                    "updated_at": "2026-07-22T00:00:00Z",
+                }
+            },
+        )
+
+    client = make_client(handler)
+    client.api_token = "secret-token"
+
+    response = client.upload_contract_async(
+        filename="contract.pdf",
+        content=b"%PDF-1.7 sample",
+        content_type="application/pdf",
+        use_ai=False,
+        metadata={"customer": "Acme"},
+    )
+
+    assert response["job"]["id"] == "job-1"
+
+
+def test_client_gets_job_status():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/jobs/job-1"
+        return httpx.Response(
+            200,
+            json={
+                "job": {
+                    "id": "job-1",
+                    "type": "contract_ingestion",
+                    "status": "succeeded",
+                    "contract_id": "contract-1",
+                    "error": None,
+                    "result": {"contract": {"id": "contract-1"}},
+                    "created_at": "2026-07-22T00:00:00Z",
+                    "updated_at": "2026-07-22T00:00:00Z",
+                }
+            },
+        )
+
+    assert make_client(handler).get_job("job-1")["job"]["status"] == "succeeded"

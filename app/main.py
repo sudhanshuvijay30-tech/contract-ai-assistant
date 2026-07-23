@@ -7,10 +7,12 @@ from app.api.routes import router
 from app.core.config import get_settings
 from app.core.errors import ContractAssistantError
 from app.core.logging import configure_logging
+from app.core.middleware import RequestContextMiddleware
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    settings.validate_runtime()
     configure_logging(settings.environment)
 
     app = FastAPI(
@@ -19,6 +21,8 @@ def create_app() -> FastAPI:
         docs_url="/docs",
         redoc_url="/redoc",
     )
+
+    app.add_middleware(RequestContextMiddleware)
 
     app.add_middleware(
         CORSMiddleware,

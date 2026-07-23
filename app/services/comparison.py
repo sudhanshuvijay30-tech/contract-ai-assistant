@@ -63,6 +63,11 @@ class ClauseComparator:
             recommended_clause=(
                 request.source_clause.text if missing_terms or score < 0.55 else None
             ),
+            compliance_notes=self._compliance_notes(request),
+            negotiation_strategy=[
+                "Prioritize high-exposure deviations before style or drafting preferences.",
+                "Ask the counterparty to explain any missing mutuality, cap, or remedy language.",
+            ],
         )
 
     def _tokens(self, text: str) -> set[str]:
@@ -81,6 +86,17 @@ class ClauseComparator:
         if "consequential damages" in source and "consequential damages" not in counterparty:
             deviations.append("Consequential damages treatment differs or is absent.")
         return deviations
+
+    def _compliance_notes(self, request: ClauseComparisonRequest) -> list[str]:
+        combined = f"{request.source_clause.text}\n{request.counterparty_clause.text}".lower()
+        notes: list[str] = []
+        if "personal data" in combined and "gdpr" not in combined and "privacy" not in combined:
+            notes.append("Data protection wording should be checked against privacy obligations.")
+        if "governing law" in combined and "jurisdiction" not in combined:
+            notes.append("Governing law appears without a matching jurisdiction/forum term.")
+        if "audit" in combined and "notice" not in combined:
+            notes.append("Audit rights should specify notice, scope, and confidentiality controls.")
+        return notes
 
     def _risk_level(
         self,

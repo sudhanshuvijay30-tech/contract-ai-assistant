@@ -18,6 +18,7 @@ class APIClientError(Exception):
 class ContractAPIClient:
     base_url: str = "http://localhost:8000"
     timeout_seconds: float = 90.0
+    api_token: str | None = None
     client: httpx.Client | None = None
 
     def health(self) -> dict[str, Any]:
@@ -31,18 +32,38 @@ class ContractAPIClient:
         use_ai: bool,
         llm_provider: str | None = None,
         llm_model: str | None = None,
+        metadata: dict[str, str | None] | None = None,
     ) -> dict[str, Any]:
-        params = {"use_ai": str(use_ai).lower()}
-        if llm_provider:
-            params["llm_provider"] = llm_provider
-        if llm_model:
-            params["llm_model"] = llm_model
+        params = self._upload_params(use_ai, llm_provider, llm_model, metadata)
         return self._request(
             "POST",
             "/contracts/upload",
             params=params,
             files={"file": (filename, content, content_type)},
         )
+
+    def upload_contract_async(
+        self,
+        filename: str,
+        content: bytes,
+        content_type: str,
+        use_ai: bool,
+        llm_provider: str | None = None,
+        llm_model: str | None = None,
+        metadata: dict[str, str | None] | None = None,
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/contracts/upload-async",
+            params=self._upload_params(use_ai, llm_provider, llm_model, metadata),
+            files={"file": (filename, content, content_type)},
+        )
+
+    def get_job(self, job_id: str) -> dict[str, Any]:
+        return self._request("GET", f"/jobs/{job_id}")
+
+    def get_contract(self, contract_id: str) -> dict[str, Any]:
+        return self._request("GET", f"/contracts/{contract_id}")
 
     def list_clauses(self, contract_id: str) -> dict[str, Any]:
         return self._request("GET", f"/contracts/{contract_id}/clauses")
@@ -94,6 +115,7 @@ class ContractAPIClient:
         use_llm: bool,
         llm_provider: str | None = None,
         llm_model: str | None = None,
+        metadata_filters: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         return self._request(
             "POST",
@@ -104,17 +126,38 @@ class ContractAPIClient:
                 "use_llm": use_llm,
                 "llm_provider": llm_provider,
                 "llm_model": llm_model,
+                "metadata_filters": metadata_filters or {},
             },
         )
 
+    def _upload_params(
+        self,
+        use_ai: bool,
+        llm_provider: str | None,
+        llm_model: str | None,
+        metadata: dict[str, str | None] | None,
+    ) -> dict[str, str]:
+        params = {"use_ai": str(use_ai).lower()}
+        if llm_provider:
+            params["llm_provider"] = llm_provider
+        if llm_model:
+            params["llm_model"] = llm_model
+        for key, value in (metadata or {}).items():
+            if value:
+                params[key] = value
+        return params
+
     def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        headers = dict(kwargs.pop("headers", {}) or {})
+        if self.api_token:
+            headers["Authorization"] = f"Bearer {self.api_token}"
         client = self.client or httpx.Client(
             base_url=self.base_url.rstrip("/"),
             timeout=self.timeout_seconds,
         )
         close_client = self.client is None
         try:
-            response = client.request(method, path, **kwargs)
+            response = client.request(method, path, headers=headers, **kwargs)
             response.raise_for_status()
             payload = response.json()
             return payload if isinstance(payload, dict) else {"data": payload}

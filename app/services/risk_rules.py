@@ -35,7 +35,33 @@ class RiskRuleEngine:
             overall_risk_level=overall,
             executive_summary=summary,
             risks=risks,
+            compliance_findings=self._compliance_findings(clauses),
+            negotiation_recommendations=self._negotiation_recommendations(risks),
         )
+
+    def _compliance_findings(self, clauses: list[Clause]) -> list[str]:
+        clause_types = {clause.type for clause in clauses}
+        findings: list[str] = []
+        if ClauseType.GOVERNING_LAW not in clause_types:
+            findings.append("No governing law clause was detected.")
+        if ClauseType.DATA_PROTECTION not in clause_types:
+            findings.append("No dedicated data protection clause was detected.")
+        if ClauseType.DISPUTE_RESOLUTION not in clause_types:
+            findings.append("No dispute resolution clause was detected.")
+        return findings
+
+    def _negotiation_recommendations(self, risks: list[RiskItem]) -> list[str]:
+        if not risks:
+            return ["Keep current drafting under legal review and confirm business fit."]
+        recommendations = []
+        high_risks = [risk for risk in risks if risk.level in {RiskLevel.HIGH, RiskLevel.CRITICAL}]
+        if high_risks:
+            recommendations.append(
+                "Resolve high-risk liability, indemnity, or uncapped exposure first."
+            )
+        recommendations.append("Use the risk evidence snippets as negotiation anchors.")
+        recommendations.append("Document any accepted deviations in the contract approval record.")
+        return recommendations
 
     def _risk_for_clause(self, clause: Clause, lowered: str) -> RiskItem | None:
         if clause.type == ClauseType.INDEMNITY and any(

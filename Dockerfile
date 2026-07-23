@@ -11,7 +11,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
+COPY alembic ./alembic
 COPY README.md pyproject.toml ./
+COPY alembic.ini ./
 
 RUN mkdir -p /app/data/contracts /app/data/uploads /app/data/chroma \
     && chown -R app:app /app

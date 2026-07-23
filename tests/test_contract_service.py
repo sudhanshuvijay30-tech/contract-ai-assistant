@@ -7,6 +7,7 @@ from app.schemas.contracts import ExtractedPage, RiskAnalysisRequest, VectorSear
 from app.services.ai import ContractAIService
 from app.services.clause_parser import ClauseParser
 from app.services.contracts import ContractService
+from app.services.metadata import ContractMetadataExtractor
 from app.services.pdf import PDFTextExtractor
 from app.storage.contract_store import JsonContractStore
 
@@ -32,10 +33,11 @@ class FakeVectorRepository:
     def __init__(self):
         self.indexed = []
 
-    def upsert_clauses(self, clauses):
+    def upsert_clauses(self, clauses, contract_metadata=None):
         self.indexed.extend(clauses)
+        self.contract_metadata = contract_metadata
 
-    def search(self, contract_id: str, query: str, top_k: int):
+    def search(self, contract_id: str, query: str, top_k: int, metadata_filters=None):
         return [
             VectorSearchResult(
                 clause_id=self.indexed[0].id,
@@ -61,6 +63,7 @@ async def test_contract_service_ingests_pdf_and_runs_rule_analysis(tmp_path: Pat
         ai_service=ContractAIService(settings),
         clause_parser=ClauseParser(),
         pdf_extractor=FakePDFExtractor(),
+        metadata_extractor=ContractMetadataExtractor(),
     )
 
     response = await service.ingest_pdf(

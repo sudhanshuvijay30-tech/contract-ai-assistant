@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from collections import defaultdict
 from typing import Any
 
@@ -23,7 +24,8 @@ RISK_COLORS = {
 
 def get_api_client() -> ContractAPIClient:
     base_url = os.getenv("STREAMLIT_API_BASE_URL", "http://localhost:8000")
-    return ContractAPIClient(base_url=base_url)
+    token = st.session_state.get("api_token") or os.getenv("STREAMLIT_API_TOKEN", "")
+    return ContractAPIClient(base_url=base_url, api_token=token.strip() or None)
 
 
 def init_state() -> None:
@@ -32,6 +34,7 @@ def init_state() -> None:
         "ai_provider": "ollama",
         "ollama_model": "llama3.1:8b",
         "openai_model": "gpt-5",
+        "api_token": os.getenv("STREAMLIT_API_TOKEN", ""),
         "upload_response": None,
         "clauses_response": None,
         "risks_response": None,
@@ -54,6 +57,14 @@ def render_status(client: ContractAPIClient) -> None:
     with st.sidebar:
         st.header("Connection")
         st.caption(client.base_url)
+        token = st.text_input(
+            "API token",
+            value=st.session_state.api_token,
+            type="password",
+            help="Required when AUTH_ENABLED=true on the FastAPI backend.",
+        )
+        st.session_state.api_token = token.strip()
+        client.api_token = st.session_state.api_token or None
         try:
             health = client.health()
         except APIClientError as exc:
@@ -63,6 +74,10 @@ def render_status(client: ContractAPIClient) -> None:
         st.metric("LLM", health.get("model", "unknown"))
         st.caption(f"Provider: {health.get('llm_provider', 'unknown')}")
         st.caption(f"Embeddings: {health.get('embedding_provider', 'unknown')}")
+        st.caption(f"Storage: {health.get('storage_backend', 'unknown')}")
+        st.caption(f"Jobs: {health.get('job_backend', 'unknown')}")
+        if health.get("auth_enabled"):
+            st.warning("API authentication is enabled.")
         st.caption(f"{health.get('app_name', 'Contract AI Assistant')} {health.get('version', '')}")
 
         provider = st.segmented_control(
@@ -103,21 +118,55 @@ def render_upload(client: ContractAPIClient) -> None:
     st.subheader("Upload Contract")
     uploaded_file = st.file_uploader("PDF contract", type=["pdf"])
     use_ai = st.toggle("Use AI to refine extracted clauses", value=False)
+    use_async = st.toggle("Use background upload", value=True)
+    with st.expander("Contract metadata"):
+        col_a, col_b = st.columns(2)
+        with col_a:
+            contract_type = st.text_input("Contract type", placeholder="MSA, NDA, SOW")
+            jurisdiction = st.text_input("Jurisdiction", placeholder="New York")
+            governing_law = st.text_input("Governing law", placeholder="Laws of New York")
+        with col_b:
+            effective_date = st.text_input("Effective date", placeholder="2026-07-22")
+            renewal_term = st.text_input("Renewal term", placeholder="One year")
+            customer = st.text_input("Customer", placeholder="Customer legal name")
+            supplier = st.text_input("Supplier", placeholder="Supplier legal name")
 
     if st.button("Upload and index", type="primary", disabled=uploaded_file is None):
         if uploaded_file is None:
             return
         llm_provider, llm_model = selected_llm()
+        metadata = {
+            "contract_type": contract_type.strip() or None,
+            "jurisdiction": jurisdiction.strip() or None,
+            "governing_law": governing_law.strip() or None,
+            "effective_date": effective_date.strip() or None,
+            "renewal_term": renewal_term.strip() or None,
+            "customer": customer.strip() or None,
+            "supplier": supplier.strip() or None,
+        }
         with st.spinner("Extracting clauses and indexing the contract..."):
             try:
-                response = client.upload_contract(
-                    filename=uploaded_file.name,
-                    content=uploaded_file.getvalue(),
-                    content_type=uploaded_file.type or "application/pdf",
-                    use_ai=use_ai,
-                    llm_provider=llm_provider,
-                    llm_model=llm_model,
-                )
+                if use_async:
+                    job_response = client.upload_contract_async(
+                        filename=uploaded_file.name,
+                        content=uploaded_file.getvalue(),
+                        content_type=uploaded_file.type or "application/pdf",
+                        use_ai=use_ai,
+                        llm_provider=llm_provider,
+                        llm_model=llm_model,
+                        metadata=metadata,
+                    )
+                    response = poll_upload_job(client, job_response["job"]["id"])
+                else:
+                    response = client.upload_contract(
+                        filename=uploaded_file.name,
+                        content=uploaded_file.getvalue(),
+                        content_type=uploaded_file.type or "application/pdf",
+                        use_ai=use_ai,
+                        llm_provider=llm_provider,
+                        llm_model=llm_model,
+                        metadata=metadata,
+                    )
             except APIClientError as exc:
                 render_error(exc)
                 return
@@ -134,6 +183,25 @@ def render_upload(client: ContractAPIClient) -> None:
         col_b.metric("Pages", contract["page_count"])
         col_c.metric("Clauses", st.session_state.upload_response["clauses_count"])
         st.code(contract["id"], language="text")
+        metadata = contract.get("metadata") or {}
+        if any(metadata.values()):
+            st.json({key: value for key, value in metadata.items() if value})
+        render_agent_trace(st.session_state.upload_response.get("agent_trace", []))
+
+
+def poll_upload_job(client: ContractAPIClient, job_id: str) -> dict[str, Any]:
+    status_slot = st.empty()
+    for _ in range(90):
+        job = client.get_job(job_id)["job"]
+        status = job["status"]
+        status_slot.info(f"Upload job {job_id}: {status}")
+        if status == "succeeded":
+            status_slot.success("Background upload completed")
+            return job["result"]
+        if status == "failed":
+            raise APIClientError(job.get("error") or "Background upload failed.", code="job_failed")
+        time.sleep(1)
+    raise APIClientError("Background upload is still running. Check the job status later.")
 
 
 def render_clauses(client: ContractAPIClient) -> None:
@@ -197,6 +265,8 @@ def render_risks(client: ContractAPIClient) -> None:
 
     st.metric("Overall risk", response["overall_risk_level"].title())
     st.write(response["executive_summary"])
+    render_list("Compliance findings", response.get("compliance_findings", []))
+    render_list("Negotiation recommendations", response.get("negotiation_recommendations", []))
     for risk in response["risks"]:
         color = RISK_COLORS.get(risk["level"], "#4a5568")
         st.markdown(
@@ -213,6 +283,7 @@ def render_risks(client: ContractAPIClient) -> None:
                 for evidence in risk["evidence"]:
                     st.write(evidence)
         st.divider()
+    render_agent_trace(response.get("agent_trace", []))
 
 
 def render_compare(client: ContractAPIClient) -> None:
@@ -269,8 +340,11 @@ def render_comparison_response(response: dict[str, Any]) -> None:
     render_list("Missing terms", response["missing_terms"])
     render_list("Material deviations", response["material_deviations"])
     render_list("Negotiation points", response["negotiation_points"])
+    render_list("Compliance notes", response.get("compliance_notes", []))
+    render_list("Negotiation strategy", response.get("negotiation_strategy", []))
     if response.get("recommended_clause"):
         st.text_area("Recommended clause", value=response["recommended_clause"], height=180)
+    render_agent_trace(response.get("agent_trace", []))
 
 
 def render_ask(client: ContractAPIClient) -> None:
@@ -282,6 +356,9 @@ def render_ask(client: ContractAPIClient) -> None:
 
     top_k = st.slider("Sources", min_value=1, max_value=12, value=5)
     use_llm = st.toggle("Use AI answer generation", value=False)
+    with st.expander("Retrieval filters"):
+        filter_contract_type = st.text_input("Filter contract type", key="ask_filter_contract_type")
+        filter_jurisdiction = st.text_input("Filter jurisdiction", key="ask_filter_jurisdiction")
 
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
@@ -298,6 +375,14 @@ def render_ask(client: ContractAPIClient) -> None:
     with st.chat_message("assistant"):
         with st.spinner("Reading relevant clauses..."):
             llm_provider, llm_model = selected_llm()
+            metadata_filters = {
+                key: value
+                for key, value in {
+                    "contract_type": filter_contract_type.strip(),
+                    "jurisdiction": filter_jurisdiction.strip(),
+                }.items()
+                if value
+            }
             try:
                 response = client.ask_contract(
                     contract_id,
@@ -306,6 +391,7 @@ def render_ask(client: ContractAPIClient) -> None:
                     use_llm,
                     llm_provider=llm_provider,
                     llm_model=llm_model,
+                    metadata_filters=metadata_filters,
                 )
             except APIClientError as exc:
                 render_error(exc)
@@ -317,6 +403,7 @@ def render_ask(client: ContractAPIClient) -> None:
                     st.markdown(f"**{source['title']}** {page_label(source)}")
                     st.caption(f"{source['clause_id']} | score {source.get('score')}")
                     st.write(source["text"])
+        render_agent_trace(response.get("agent_trace", []))
         st.session_state.messages.append({"role": "assistant", "content": response["answer"]})
 
 
@@ -326,6 +413,15 @@ def render_list(title: str, items: list[str]) -> None:
     st.markdown(f"**{title}**")
     for item in items:
         st.write(f"- {item}")
+
+
+def render_agent_trace(trace: list[dict[str, Any]]) -> None:
+    if not trace:
+        return
+    with st.expander("Agent trace"):
+        for item in trace:
+            st.markdown(f"**{item['agent_name']}**")
+            st.caption(item["summary"])
 
 
 def clause_type_options() -> list[str]:
